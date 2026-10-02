@@ -74,18 +74,18 @@ jobs:
               '',
               '**Unsigned APK: this build checks compilation; sign it before installation.**',
               '',
-              'Download the ZIP from Artifacts below. It includes the APK and build-report.json.',
+              'Download the APK directly from Artifacts below (no ZIP extraction needed).',
               'No GitHub Release is created.',
           ]
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
               output.write('\n'.join(lines) + '\n')
           PY
 
-      - name: Upload APK and report
+      - name: Upload APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: wearengine-bridge-unsigned-${{ github.run_number }}-${{ github.run_attempt }}
-          path: dist/
+          path: dist/*/*.apk
+          archive: false
           if-no-files-found: error
           retention-days: 14
 
