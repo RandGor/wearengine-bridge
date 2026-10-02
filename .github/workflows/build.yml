@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   build:
-    name: Build and test unsigned APK
+    name: Build, sign and test APK
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
@@ -42,15 +42,49 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-35" "build-tools;36.1.0"
 
-      - name: Build APK and run checks
+      - name: Build, sign and check APK
         env:
           DIAGNOSTIC: ${{ inputs.diagnostic && 'true' || 'false' }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
-          build_args=(--sdk "$ANDROID_HOME" --jdk "$JAVA_HOME" --fetch-api)
-          if [ "$DIAGNOSTIC" = true ]; then
-            build_args+=(--diagnostic)
-          fi
-          python build.py "${build_args[@]}"
+          python - <<'PY'
+          import base64
+          import binascii
+          import os
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          names = ('KEYSTORE_BASE64', 'KEYSTORE_PASSWORD', 'KEY_ALIAS')
+          secrets = {name: os.environ.pop(name, '') for name in names}
+          missing = [name for name in names if not secrets[name]]
+          if missing:
+              raise SystemExit('Missing repository secrets: ' + ', '.join(missing))
+          try:
+              key_bytes = base64.b64decode(''.join(secrets['KEYSTORE_BASE64'].split()), validate=True)
+          except (ValueError, binascii.Error):
+              raise SystemExit('KEYSTORE_BASE64 must contain valid Base64') from None
+          if not key_bytes:
+              raise SystemExit('KEYSTORE_BASE64 decodes to an empty file')
+          os.umask(0o077)
+          with tempfile.TemporaryDirectory(prefix='wearengine-signing-', dir=os.environ['RUNNER_TEMP']) as folder:
+              key = Path(folder) / 'key.p12'
+              password = Path(folder) / 'key.pass'
+              key.write_bytes(key_bytes)
+              password.write_text(secrets['KEYSTORE_PASSWORD'], encoding='utf-8')
+              args = [sys.executable, 'build.py', '--sdk', os.environ['ANDROID_HOME'],
+                      '--jdk', os.environ['JAVA_HOME'], '--fetch-api',
+                      '--keystore', str(key), '--ks-alias', secrets['KEY_ALIAS'],
+                      '--ks-pass-file', str(password)]
+              if os.environ['DIAGNOSTIC'] == 'true':
+                  args.append('--diagnostic')
+              result = subprocess.run(args)
+              if result.returncode:
+                  raise SystemExit(result.returncode)
+          PY
 
       - name: Write build summary
         run: |
@@ -63,6 +97,8 @@ jobs:
           if len(reports) != 1:
               raise SystemExit('Expected one build report')
           report = json.loads(reports[0].read_text(encoding='utf-8'))
+          if not report['signed'] or not report['certificate_sha256']:
+              raise SystemExit('Expected a verified signed APK')
           lines = [
               '## WearEngine Bridge build',
               '',
@@ -70,9 +106,10 @@ jobs:
               f"- Variant: {report['variant']}",
               f"- APK: `{report['apk']}`",
               f"- SHA-256: `{report['sha256']}`",
+              f"- Signing certificate SHA-256: `{report['certificate_sha256']}`",
               *[f'- {check}' for check in report['tests']],
               '',
-              '**Unsigned APK: this build checks compilation; sign it before installation.**',
+              '**Signed APK: signature verified by apksigner. Device testing is still required.**',
               '',
               'Download the APK directly from Artifacts below (no ZIP extraction needed).',
               'No GitHub Release is created.',
@@ -84,7 +121,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          path: dist/*/*.apk
+          path: dist/*/*-signed.apk
           archive: false
           if-no-files-found: error
           retention-days: 14
