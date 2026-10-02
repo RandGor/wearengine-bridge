@@ -1,0 +1,99 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      diagnostic:
+        description: Include detailed hook logs
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test unsigned APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Set up Java
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Prepare Android SDK
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-35" "build-tools;36.1.0"
+
+      - name: Build APK and run checks
+        env:
+          DIAGNOSTIC: ${{ inputs.diagnostic && 'true' || 'false' }}
+        run: |
+          build_args=(--sdk "$ANDROID_HOME" --jdk "$JAVA_HOME" --fetch-api)
+          if [ "$DIAGNOSTIC" = true ]; then
+            build_args+=(--diagnostic)
+          fi
+          python build.py "${build_args[@]}"
+
+      - name: Write build summary
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          reports = list(Path('dist').glob('*/build-report.json'))
+          if len(reports) != 1:
+              raise SystemExit('Expected one build report')
+          report = json.loads(reports[0].read_text(encoding='utf-8'))
+          lines = [
+              '## WearEngine Bridge build',
+              '',
+              f"- Version: {report['version']} (code {report['versionCode']})",
+              f"- Variant: {report['variant']}",
+              f"- APK: `{report['apk']}`",
+              f"- SHA-256: `{report['sha256']}`",
+              *[f'- {check}' for check in report['tests']],
+              '',
+              '**Unsigned APK: this build checks compilation; sign it before installation.**',
+              '',
+              'Download the ZIP from Artifacts below. It includes the APK and build-report.json.',
+              'No GitHub Release is created.',
+          ]
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
+              output.write('\n'.join(lines) + '\n')
+          PY
+
+      - name: Upload APK and report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wearengine-bridge-unsigned-${{ github.run_number }}-${{ github.run_attempt }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wearengine-bridge-build-logs-${{ github.run_number }}-${{ github.run_attempt }}
+          path: build/**/*.txt
+          if-no-files-found: ignore
+          retention-days: 7
