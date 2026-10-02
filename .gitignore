@@ -1,0 +1,33 @@
+# Local build products and dependencies
+/build/
+/dist/
+__pycache__/
+*.pyc
+
+# IDE and machine-local configuration
+/.idea/
+*.iml
+/local.properties
+/local*.json
+/.env
+/.env.*
+
+# Signing material is kept outside this repository
+/signing/
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.pass
+*.key
+signing.properties
+keystore.properties
+
+# Device artifacts and logs
+*.apk
+*.apks
+*.aab
+*.log
+*.jsonl
+.DS_Store
+Thumbs.db
