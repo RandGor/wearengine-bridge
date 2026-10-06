@@ -2,8 +2,8 @@
 
 ## 0.1 — Unreleased
 
-Initial public version, versionCode 1. Release preparation is in progress; the final
-signed APK still needs on-device validation.
+Initial public version, versionCode 1. The developer confirmed successful build,
+installation and operation of the signed APK on their phone on 2026-10-06.
 
 - Allow any client package and signing certificate for Huawei Health's
   `com.huawei.hiwear.devicemanager` scope on the `wearEngine` channel.

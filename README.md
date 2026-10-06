@@ -45,8 +45,9 @@ does not establish compatibility with an untested version's internal behavior.
 
 The hook worked in a preliminary build with Frida disconnected. Version 0.1 keeps
 that scope decision, removes periodic heartbeat logging, makes detailed logging
-optional, and attempts hooks on untested Health versions with a warning. Device validation of the final signed 0.1 APK is still pending. HAP
-installation through a client has not yet been verified as part of this project.
+optional, and attempts hooks on untested Health versions with a warning. The developer confirmed successful build, installation and operation of the signed
+0.1 APK on their phone. Other Health versions remain untested. HAP installation
+through a client has not been separately confirmed.
 
 ## Installation
 
@@ -91,9 +92,25 @@ class. The module observes class-loading events; it does not poll or use delayed
 
 ## Logs and troubleshooting
 
-Logcat tag: **`WearEngineBridge`**. Messages also appear in the framework's module log.
-In Android Studio, use `tag:WearEngineBridge` without a filter limiting results to the
-module package: these messages originate in Health's processes.
+Messages are written both to the Vector/LSPosed module log and to Android Logcat.
+They are not shown as notifications or inside DevEco Assistant.
+
+**On the phone:** open the Vector/LSPosed manager, open its **Logs** section
+(the label may vary by version or language), and look for `WearEngineBridge`
+in the module log. If there is no search field, export the log and search the
+saved text.
+
+**In Android Studio:** open **View > Tool Windows > Logcat**, select the connected
+phone, and enter `tag:WearEngineBridge` in the filter field. Include **Info** level
+messages. Remove `package:mine` or any filter restricted to the module or DevEco
+Assistant: the messages come from Huawei Health's `:DaemonService` and
+`:PhoneService` processes.
+
+To capture a fresh hook installation, start viewing the log, force-stop Huawei
+Health through Android settings, then reopen Health and the WearEngine client and
+repeat the request. Messages are event-driven; there is no periodic heartbeat.
+`READY`, `CLASS_INACTIVE` and `CLASS_HOOK_FAILED` are available in normal builds;
+a diagnostic build is only needed for additional class-loader and per-call details.
 
 Normal builds log `READY` and errors, without heartbeat or per-call logs. Diagnostic
 builds additionally log class loaders and `CALL` / `RETURN` events.
