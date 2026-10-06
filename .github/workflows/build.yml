@@ -1,0 +1,211 @@
+name: Build APK
+
+on:
+  push:
+    tags:
+      - '**'
+  workflow_dispatch:
+    inputs:
+      diagnostic:
+        description: Include detailed hook logs
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build, sign and test APK
+    if: github.event_name != 'push' || !github.event.deleted
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Set up Java
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Prepare Android SDK
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-35" "build-tools;36.1.0"
+
+      - name: Build, sign and check APK
+        env:
+          DIAGNOSTIC: ${{ inputs.diagnostic && 'true' || 'false' }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          python - <<'PY'
+          import base64
+          import binascii
+          import os
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          names = ('KEYSTORE_BASE64', 'KEYSTORE_PASSWORD', 'KEY_ALIAS')
+          secrets = {name: os.environ.pop(name, '') for name in names}
+          missing = [name for name in names if not secrets[name]]
+          if missing:
+              raise SystemExit('Missing repository secrets: ' + ', '.join(missing))
+          try:
+              key_bytes = base64.b64decode(''.join(secrets['KEYSTORE_BASE64'].split()), validate=True)
+          except (ValueError, binascii.Error):
+              raise SystemExit('KEYSTORE_BASE64 must contain valid Base64') from None
+          if not key_bytes:
+              raise SystemExit('KEYSTORE_BASE64 decodes to an empty file')
+          os.umask(0o077)
+          with tempfile.TemporaryDirectory(prefix='wearengine-signing-', dir=os.environ['RUNNER_TEMP']) as folder:
+              key = Path(folder) / 'key.p12'
+              password = Path(folder) / 'key.pass'
+              key.write_bytes(key_bytes)
+              password.write_text(secrets['KEYSTORE_PASSWORD'], encoding='utf-8')
+              args = [sys.executable, 'build.py', '--sdk', os.environ['ANDROID_HOME'],
+                      '--jdk', os.environ['JAVA_HOME'], '--fetch-api',
+                      '--keystore', str(key), '--ks-alias', secrets['KEY_ALIAS'],
+                      '--ks-pass-file', str(password)]
+              if os.environ['DIAGNOSTIC'] == 'true':
+                  args.append('--diagnostic')
+              result = subprocess.run(args)
+              if result.returncode:
+                  raise SystemExit(result.returncode)
+          PY
+
+      - name: Write build summary
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          reports = list(Path('dist').glob('*/build-report.json'))
+          if len(reports) != 1:
+              raise SystemExit('Expected one build report')
+          report = json.loads(reports[0].read_text(encoding='utf-8'))
+          if not report['signed'] or not report['certificate_sha256']:
+              raise SystemExit('Expected a verified signed APK')
+          lines = [
+              '## WearEngine Bridge build',
+              '',
+              f"- Version: {report['version']} (code {report['versionCode']})",
+              f"- Variant: {report['variant']}",
+              f"- APK: `{report['apk']}`",
+              f"- SHA-256: `{report['sha256']}`",
+              f"- Signing certificate SHA-256: `{report['certificate_sha256']}`",
+              *[f'- {check}' for check in report['tests']],
+              '',
+              '**Signed APK: signature verified by apksigner. Device testing is still required.**',
+              '',
+              'Download the APK directly from Artifacts below (no ZIP extraction needed).',
+              ('A draft GitHub Release will be created or updated after this build.'
+               if os.environ['GITHUB_EVENT_NAME'] == 'push'
+               else 'Manual build: no GitHub Release is created.'),
+          ]
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
+              output.write('\n'.join(lines) + '\n')
+          PY
+
+      - name: Upload APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: dist/*/*-signed.apk
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create or update draft release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          reports = list(Path('dist').glob('*/build-report.json'))
+          if len(reports) != 1:
+              raise SystemExit('Expected one build report')
+          report = json.loads(reports[0].read_text(encoding='utf-8'))
+          apk = reports[0].parent / report['apk']
+          if not report['signed'] or report['variant'] != 'normal' or not report['certificate_sha256']:
+              raise SystemExit('Draft releases require a verified signed normal APK')
+          if hashlib.sha256(apk.read_bytes()).hexdigest() != report['sha256']:
+              raise SystemExit('APK checksum differs from build report')
+          version = report['version']
+          title = 'WearEngine Bridge ' + version
+          changelog = Path('CHANGELOG.md').read_text(encoding='utf-8')
+          section = re.search(r'^## ' + re.escape(version) + r'(?:[^\S\n][^\n]*)?\n(.*?)(?=^## |\Z)',
+                              changelog, re.MULTILINE | re.DOTALL)
+          if not section:
+              raise SystemExit('Missing changelog section for version ' + version)
+          notes = Path(os.environ['RUNNER_TEMP']) / 'wearengine-release-notes.md'
+          build_notes = ('<!-- wearengine-build:start -->\n### Build\n\n'
+                           + '- Version: ' + version + ' (code ' + str(report['versionCode']) + ')\n'
+                           + '- Commit: `' + os.environ['GITHUB_SHA'] + '`\n'
+                           + '- APK SHA-256: `' + report['sha256'] + '`\n'
+                           + '- Certificate SHA-256: `' + report['certificate_sha256'] + '`\n'
+                           + '<!-- wearengine-build:end -->')
+          notes.write_text(section.group(1).strip() + '\n\n' + build_notes + '\n', encoding='utf-8')
+          tag = os.environ['RELEASE_TAG']
+          repo = os.environ['GITHUB_REPOSITORY']
+          existing = subprocess.run(['gh', 'release', 'view', '--repo', repo,
+                                     '--json', 'isDraft,body', '--', tag], capture_output=True, text=True)
+          if existing.returncode == 0:
+              release = json.loads(existing.stdout)
+              if not release['isDraft']:
+                  raise SystemExit('Release is already published; refusing to modify it')
+              # Preserve edited release text, refreshing only generated build metadata.
+              body = release.get('body') or ''
+              pattern = r'<!-- wearengine-build:start -->.*?<!-- wearengine-build:end -->'
+              if re.search(pattern, body, re.DOTALL):
+                  body = re.sub(pattern, lambda _: build_notes, body, flags=re.DOTALL)
+              else:
+                  body = body.rstrip() + '\n\n' + build_notes
+              notes.write_text(body + '\n', encoding='utf-8')
+              subprocess.run(['gh', 'release', 'upload', '--repo', repo, '--clobber',
+                              '--', tag, str(apk)], check=True)
+              subprocess.run(['gh', 'release', 'edit', '--repo', repo, '--draft',
+                              '--title', title, '--notes-file', str(notes), '--', tag], check=True)
+          else:
+              subprocess.run(['gh', 'release', 'create', '--repo', repo, '--draft',
+                              '--verify-tag', '--title', title, '--notes-file', str(notes),
+                              '--', tag, str(apk)], check=True)
+          print('Draft release prepared for tag ' + tag + '; publish it manually when ready.')
+          PY
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wearengine-bridge-build-logs-${{ github.run_number }}-${{ github.run_attempt }}
+          path: build/**/*.txt
+          if-no-files-found: ignore
+          retention-days: 7
