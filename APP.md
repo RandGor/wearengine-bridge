@@ -385,3 +385,51 @@ SUMMARY в каталоге. Изменения относятся к докум
 репозиторий каталога пуст. Подготовлены обычные коммиты и push main обоих проектов,
 без переноса тегов и публикации релизов. Следующий шаг пользователя — релиз
 1-0.1 в каталоге с APK исходного релиза 0.1.
+
+## Диагностика отсутствующей страницы каталога — 2026-10-06
+
+Публичный API подтвердил релиз каталога 1-0.1, published_at 2026-10-06T08:34:44Z,
+draft:false, prerelease:false. APK uploaded, 16652 байта, digest
+sha256:0b822e1e3d5a36433c225df9220aaf09f898763827ca01d58e26c4cdeb3d7fa7.
+README.md и SUMMARY доступны в main. Автоматические проверки Tag успешно завершены:
+https://github.com/Xposed-Modules-Repo/modules/actions/runs/37437049438
+https://github.com/Xposed-Modules-Repo/modules/actions/runs/37437048779
+Страница modules.lsposed.org/module/ru.randgor.wearenginebridge возвращает HTTP 404.
+
+Найдено конкретное нарушение требований: description репозитория пуст;
+homepage также пуст. Профиль https://github.com/Xposed-Modules-Repo прямо требует
+непустое description с названием модуля для валидной карточки. Пользователю нужно
+в About сохранить Description: WearEngine Bridge и Website со ссылкой на основной
+проект. README/SUMMARY не заменяют это поле. Настройки удалённого репозитория
+ассистентом не менялись. Следующий шаг — заполнение About и повторная проверка
+индексации. Повторная сборка/загрузка APK не требуется по найденным данным.
+
+## Карточка каталога доступна — 2026-10-06
+
+Повторная проверка после правки пользователем: GitHub API возвращает description
+WearEngine Bridge и homepage https://github.com/RandGor/wearengine-bridge
+(updated_at 2026-10-06T08:56:16Z). Страница
+https://modules.lsposed.org/module/ru.randgor.wearenginebridge
+теперь отвечает HTTP 200, title WearEngine Bridge · Xposed Module Repository;
+HTML содержит название и package ID. Появление карточки подтверждено.
+Удалённые настройки/файлы не менялись; эта запись локальная, без commit/push.
+
+## Модуль отсутствует в мобильном каталоге Vector — 2026-10-06
+
+Скриншот пользователя: 1055 модулей, свежие позиции датированы 3 октября.
+Проверен текущий публичный RepoRepository.kt JingMatrix/Vector: LIST_MIRRORS
+содержит только https://backup.modules.lsposed.org/; список берётся из modules.json.
+Per-module details дополнительно поддерживают https://modules.lsposed.org/.
+Точная версия установленного Vector не считывалась.
+
+Фактическая проверка backup.modules.lsposed.org/modules.json: HTTP 200,
+1058 записей, после фильтра hide != true и непустых releases — 1055, нашего
+package ID нет. Last-Modified: Tue, 06 Oct 2026 00:06:55 GMT; cache max-age=600.
+Самая свежая updatedAt — 2026-10-02T23:34:03Z (TeleVip), соответствует датам
+3 октября в часовом поясе пользователя. Основной modules.lsposed.org/modules.json
+возвращает 403, но module/ru.randgor.wearenginebridge.json возвращает 200 с
+карточкой модуля. Причина подтверждена на серверном списке зеркала: он отстаёт
+от сайта. Обновление списка на телефоне не может добавить отсутствующую запись;
+точный срок синхронизации не установлен. Переиздание APK не требуется.
+Источник кода: https://github.com/JingMatrix/Vector/blob/master/manager/src/main/kotlin/org/matrix/vector/manager/data/repository/RepoRepository.kt
+Телефон, код модуля и удалённые репозитории не изменялись.
